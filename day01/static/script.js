@@ -1,57 +1,5 @@
 // static/script.js
 
-const fallbackVoices = [
-  { name: "Natalie", gender: "Female", voiceId: "en-US-natalie" },
-  { name: "Aria", gender: "Female", voiceId: "en-US-aria" },
-  { name: "Guy", gender: "Male", voiceId: "en-US-guy" },
-  { name: "Davis", gender: "Male", voiceId: "en-US-davis" },
-  { name: "Sara", gender: "Female", voiceId: "en-US-sara" },
-];
-
-function populateVoiceSelector(voices) {
-  const voiceSelector = document.getElementById("voiceSelector");
-  voiceSelector.innerHTML = "";
-  voices.forEach((v) => {
-    voiceSelector.add(new Option(`${v.name} (${v.gender})`, v.voiceId));
-  });
-}
-
-async function generateTTS() {
-  const text = document.getElementById("textInput").value;
-  const voiceId = document.getElementById("voiceSelector").value;
-  const button = document.getElementById("generateBtn");
-  const statusDisplay = document.getElementById("statusDisplay");
-  const audioPlayer = document.getElementById("audioPlayer");
-
-  statusDisplay.textContent = "";
-  audioPlayer.hidden = true;
-  button.disabled = true;
-  button.textContent = "Generating...";
-
-  const formData = new FormData();
-  formData.append("text", text);
-  formData.append("voiceId", voiceId);
-
-  try {
-    const response = await fetch("/tts", { method: "POST", body: formData });
-    const data = await response.json();
-
-    if (response.ok && data.audio_url) {
-      audioPlayer.src = data.audio_url;
-      audioPlayer.hidden = false;
-      audioPlayer.play();
-      statusDisplay.textContent = "";
-    } else {
-      statusDisplay.textContent = `Error: ${data.error || "TTS failed."}`;
-    }
-  } catch (err) {
-    statusDisplay.textContent = "An unexpected error occurred.";
-  } finally {
-    button.disabled = false;
-    button.textContent = "Generate Voice";
-  }
-}
-
 document.addEventListener("DOMContentLoaded", async () => {
   // --- SESSION MANAGEMENT ---
   const urlParams = new URLSearchParams(window.location.search);
@@ -61,35 +9,18 @@ document.addEventListener("DOMContentLoaded", async () => {
     window.history.replaceState({}, '', `?session_id=${sessionId}`);
   }
 
-  document.getElementById("generateBtn").addEventListener("click", generateTTS);
+  // --- WebSocket and Recording Logic ---
+  let audioContext = null;
+  let source = null;
+  let processor = null;
+  let isRecording = false;
+  let socket = null;
 
-  try {
-    const res = await fetch("/voices");
-    if (!res.ok) throw new Error("Failed to fetch voices from API");
-    const data = (await res.json()) || {};
-    const voices = data.voices || [];
-    populateVoiceSelector(voices.length ? voices : fallbackVoices);
-  } catch (e) {
-    console.warn("API call for voices failed. Using fallback list.", e);
-    populateVoiceSelector(fallbackVoices);
-  }
-
-  // --- DAY 10: Conversational Agent Logic ---
-  let mediaRecorder = null;
-  let recordedChunks = [];
-
-  const startBtn = document.getElementById("startBtn");
-  const stopBtn = document.getElementById("stopBtn");
+  const recordBtn = document.getElementById("recordBtn");
   const statusDisplay = document.getElementById("statusDisplay");
-  const audioPlayer = document.getElementById("audioPlayer");
-
-  // When the agent's audio finishes playing, automatically start recording.
-  audioPlayer.addEventListener('ended', () => {
-    statusDisplay.textContent = "I'm listening... Click Stop to send.";
-    // Instead of simulating a click, directly call the start recording logic
-    // and manually set the button states for reliability.
-    startRecording();
-  });
+  const transcriptionDisplay = document.getElementById("transcriptionDisplay");
+  const currentTranscript = document.getElementById("currentTranscript");
+  const transcriptionHistory = document.getElementById("transcriptionHistory");
 
   const startRecording = async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -97,79 +28,198 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    startBtn.disabled = true;
-    stopBtn.disabled = false; // Explicitly enable the stop button
-    statusDisplay.textContent = "Recording... Click Stop when you're done.";
-    audioPlayer.hidden = true;
-    recordedChunks = [];
+    isRecording = true;
+    recordBtn.classList.add("recording");
+    statusDisplay.textContent = "Listening... Speak now.";
+
+    // Show transcription area and clear current transcript
+    currentTranscript.textContent = "Listening for speech...";
+    transcriptionDisplay.classList.remove("d-none");
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaRecorder = new MediaRecorder(stream);
+      // Establish WebSocket connection
+      const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      socket = new WebSocket(`${wsProtocol}//${window.location.host}/ws`);
 
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) recordedChunks.push(event.data);
+      socket.onopen = async () => {
+        console.log("WebSocket connection established for streaming transcription with turn detection.");
+        statusDisplay.textContent = "Connected. Speak now - I'll detect when you stop talking.";
+
+        try {
+          // Get microphone access
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+          // Create AudioContext with 16kHz sample rate (required by AssemblyAI)
+          audioContext = new (window.AudioContext || window.webkitAudioContext)({
+            sampleRate: 16000
+          });
+
+          source = audioContext.createMediaStreamSource(stream);
+
+          // Create ScriptProcessorNode for processing audio chunks
+          processor = audioContext.createScriptProcessor(4096, 1, 1); // Mono, 4096 buffer size
+
+          processor.onaudioprocess = (event) => {
+            const inputData = event.inputBuffer.getChannelData(0);
+
+            // Convert float32 (-1.0 to 1.0) to 16-bit PCM
+            const pcmData = new Int16Array(inputData.length);
+            for (let i = 0; i < inputData.length; i++) {
+              const sample = Math.max(-1, Math.min(1, inputData[i]));
+              pcmData[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+            }
+
+            // Send PCM data to server if WebSocket is open
+            if (socket && socket.readyState === WebSocket.OPEN) {
+              console.log(`Sending PCM chunk of size: ${pcmData.buffer.byteLength} bytes`);
+              socket.send(pcmData.buffer);
+            }
+          };
+
+          // Connect the audio nodes
+          source.connect(processor);
+          processor.connect(audioContext.destination);
+
+          // Store the stream for cleanup
+          recordBtn.mediaStream = stream;
+
+        } catch (micError) {
+          console.error("Error accessing microphone:", micError);
+          alert("Could not access microphone. Please check permissions.");
+          stopRecording();
+        }
       };
 
-      mediaRecorder.onstop = handleStopRecording;
-      mediaRecorder.start();
+      // Handle messages from the WebSocket (transcription updates and turn detection)
+      socket.onmessage = (event) => {
+        console.log("Received WebSocket message:", event.data);
+        try {
+          const data = JSON.parse(event.data);
+          console.log("Parsed message data:", data);
+
+          if (data.type === "transcription" && data.end_of_turn) {
+            // Display transcription only at end of turn
+            console.log(`End of turn transcription: ${data.text}`);
+
+            // Update the current transcript display
+            currentTranscript.textContent = data.text;
+            currentTranscript.classList.add("final-transcript");
+
+            // Add to transcription history
+            addToTranscriptionHistory(data.text);
+
+            // Update status
+            statusDisplay.textContent = "Turn completed. Continue speaking or stop recording.";
+
+          } else if (data.type === "turn_end") {
+            console.log("Turn end detected:", data.message);
+            statusDisplay.textContent = "Turn detected. Waiting for next speech...";
+
+            // Reset current transcript display for next turn
+            setTimeout(() => {
+              currentTranscript.textContent = "Listening for next speech...";
+              currentTranscript.classList.remove("final-transcript");
+            }, 2000);
+
+          } else if (data.type === "error") {
+            console.error("Transcription error:", data.message);
+            statusDisplay.textContent = `Error: ${data.message}`;
+            statusDisplay.classList.add("text-danger");
+          } else if (data.type === "status") {
+            console.log("Status message:", data.message);
+            statusDisplay.textContent = data.message;
+          }
+        } catch (err) {
+          console.error("Error parsing WebSocket message:", err, "Raw data:", event.data);
+        }
+      };
+
+      socket.onclose = () => {
+        console.log("WebSocket connection closed.");
+        statusDisplay.textContent = "Transcription session ended.";
+        statusDisplay.classList.remove("text-danger");
+      };
+
+      socket.onerror = (error) => {
+        console.error("WebSocket error:", error);
+        statusDisplay.textContent = "Connection error occurred.";
+        statusDisplay.classList.add("text-danger");
+      };
 
     } catch (err) {
-      console.error("Error accessing mic:", err);
-      alert("Could not access microphone. Please check permissions.");
-      startBtn.disabled = false;
-      stopBtn.disabled = true;
-      statusDisplay.textContent = "Ready to chat!";
+      console.error("Error starting recording:", err);
+      alert("Failed to start recording session.");
+      stopRecording();
     }
   };
 
+  const addToTranscriptionHistory = (text) => {
+    if (!transcriptionHistory) return;
 
-  const handleStopRecording = async () => {
-    const blob = new Blob(recordedChunks, { type: "audio/webm" });
-    const formData = new FormData();
-    formData.append("audio_file", blob, "recording.webm");
+    const historyItem = document.createElement("div");
+    historyItem.className = "transcription-history-item";
+    historyItem.innerHTML = `
+            <div class="history-timestamp">${new Date().toLocaleTimeString()}</div>
+            <div class="history-text">${text}</div>
+        `;
+    transcriptionHistory.appendChild(historyItem);
 
-    statusDisplay.textContent = "Thinking...";
-    startBtn.disabled = true;
-    stopBtn.disabled = true;
-
-    try {
-      const currentSessionId = new URLSearchParams(window.location.search).get('session_id');
-      if (!currentSessionId) {
-        statusDisplay.textContent = "Error: Session ID is missing.";
-        startBtn.disabled = false;
-        return;
-      }
-
-      const response = await fetch(`/agent/chat/${currentSessionId}`, {
-        method: "POST",
-        body: formData,
-      });
-      const result = await response.json();
-
-      if (response.ok && result.audio_url) {
-        statusDisplay.textContent = "Here is my response:";
-        audioPlayer.src = result.audio_url;
-        audioPlayer.hidden = false;
-        audioPlayer.play();
-        // The 'ended' event on the audio player will now automatically start the next recording.
-      } else {
-        statusDisplay.textContent = `Error: ${result.error || "Failed to get response."}`;
-        startBtn.disabled = false; // Re-enable start on error to allow user to try again.
-      }
-    } catch (error) {
-      console.error("Error with conversational agent:", error);
-      statusDisplay.textContent = "An error occurred. Please try again.";
-      startBtn.disabled = false; // Re-enable start on error.
-    }
+    // Scroll to bottom of history
+    transcriptionHistory.scrollTop = transcriptionHistory.scrollHeight;
   };
 
-  // The start button now only initiates the very first recording.
-  startBtn.addEventListener("click", startRecording);
+  const stopRecording = () => {
+    if (!isRecording) return;
 
-  stopBtn.addEventListener("click", () => {
-    if (mediaRecorder && mediaRecorder.state === "recording") {
-      mediaRecorder.stop();
+    isRecording = false;
+    recordBtn.classList.remove("recording");
+    statusDisplay.textContent = "Stopping recording...";
+    statusDisplay.classList.remove("text-danger");
+
+    // Clean up audio processing
+    if (processor) {
+      processor.disconnect();
+      processor = null;
+    }
+
+    if (source) {
+      source.disconnect();
+      source = null;
+    }
+
+    if (audioContext) {
+      audioContext.close();
+      audioContext = null;
+    }
+
+    // Stop media stream tracks
+    if (recordBtn.mediaStream) {
+      recordBtn.mediaStream.getTracks().forEach(track => track.stop());
+      recordBtn.mediaStream = null;
+    }
+
+    // Send EOF and close WebSocket
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send("EOF");
+      socket.close();
+    }
+    socket = null;
+
+    statusDisplay.textContent = "Ready to chat!";
+  };
+
+  recordBtn.addEventListener("click", () => {
+    if (isRecording) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  });
+
+  // Clean up on page unload
+  window.addEventListener('beforeunload', () => {
+    if (isRecording) {
+      stopRecording();
     }
   });
 });
