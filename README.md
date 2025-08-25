@@ -1,64 +1,55 @@
-🎙️ Murf_ai
+# 🎙️ Murf_ai 
 
-An AI-powered conversational voice agent that listens, understands, and responds in real-time using STT (Speech-to-Text), LLM (Language Model), and TTS (Text-to-Speech).
+This project is a hands-on guide to building a **voice-based conversational AI** using modern web technologies and powerful AI APIs. You can engage in a **continuous, voice-to-voice conversation** with an AI powered by **Google's Gemini LLM**. The agent remembers the context of your conversation, enabling natural follow-up questions and a more human-like interaction.  
 
-✨ Features
+The repository is structured by **day**, with each folder representing a significant step in the development process — from setting up the server to implementing a **full conversational loop with memory**.  
 
-🎤 Speech Recognition – Converts spoken input into text using AssemblyAI.
+---
 
-🧠 Conversational AI – Generates intelligent responses with Gemini LLM.
+## ✨ Key Features  
+- **Voice-to-Voice Interaction**: Speak to the agent and receive a spoken response for a seamless conversational experience.  
+- **Contextual Conversations**: Maintains a chat history per session, enabling intelligent follow-ups.  
+- **End-to-End AI Pipeline**: Integrates Speech-to-Text → LLM → Text-to-Speech in one flow.  
+- **Modern & Intuitive UI**: Clean, single-button interface with visual feedback (ready, recording, thinking).  
+- **Robust Error Handling**: Includes fallback audio responses for smooth user experience when API calls fail.  
 
-🔊 Voice Output – Speaks responses naturally using Murf AI voices.
+---
 
-⚡ Real-Time Communication – Powered by FastAPI and WebSockets.
+## 🛠️ Tech Stack  
 
-🛠️ Tech Stack
+**Backend:**  
+- [FastAPI](https://fastapi.tiangolo.com/) – High-performance, async API server  
+- [Uvicorn](https://www.uvicorn.org/) – ASGI server for FastAPI  
+- [Python-Dotenv](https://pypi.org/project/python-dotenv/) – Manage environment variables securely  
 
-Backend:
-FastAPI: For building the high-performance, asynchronous API server.
-Uvicorn: As the ASGI server to run the FastAPI application.
-Python-Dotenv: To manage environment variables securely.
+**Frontend:**  
+- HTML, CSS, JavaScript  
+- [Bootstrap](https://getbootstrap.com/) – Responsive UI components  
+- MediaRecorder API – Capture microphone audio in the browser  
 
-Frontend:
-HTML, CSS, JavaScript: For the structure, styling, and client-side logic.
-Bootstrap: For creating a responsive and modern user interface.
-MediaRecorder API: To capture audio directly from the user's microphone in the browser.
+**AI & Voice APIs:**  
+- [Murf AI](https://murf.ai/) – High-quality Text-to-Speech (TTS)  
+- [AssemblyAI](https://www.assemblyai.com/) – Accurate Speech-to-Text (STT)  
+- [Google Gemini](https://deepmind.google/technologies/gemini/) – LLM for intelligent responses  
 
-AI & Voice APIs:
-Murf AI: For generating high-quality, natural-sounding Text-to-Speech (TTS).
-AssemblyAI: For providing fast and accurate Speech-to-Text (STT) transcription.
-Google Gemini: As the Large Language Model (LLM) for generating intelligent and coherent responses.
+---
 
-🚀 Getting Started
-1️⃣ Clone the repository
-git clone https://github.com/your-username/ai-voice-agent.git
-cd ai-voice-agent
+## ⚙️ Architecture  
 
-2️⃣ Install dependencies
-pip install -r requirements.txt
+The application follows a **client-server architecture**:  
 
-3️⃣ Set up environment variables
+1. **Client (Browser)**  
+   - Captures voice input with the MediaRecorder API  
+   - Sends audio to the backend  
+   - Plays the AI’s spoken response  
+   - Updates UI states (ready, recording, thinking)  
 
-Create a .env file in the root directory with your API keys:
+2. **Server (FastAPI)**  
+   - Receives audio input  
+   - Sends audio → **AssemblyAI** (STT)  
+   - Retrieves chat history & sends context → **Google Gemini** (LLM)  
+   - Sends Gemini’s response → **Murf AI** (TTS)  
+   - Returns final audio URL to the client  
 
-ASSEMBLYAI_API_KEY=your_key_here
-GEMINI_API_KEY=your_key_here
-MURF_API_KEY=your_key_here
 
-4️⃣ Run the server
-uvicorn main:app --reload
 
-5️⃣ Open the app
-
-Visit http://127.0.0.1:8000 in your browser.
-
-📂 Project Structure
-ai-voice-agent/
-│── app/
-│   ├── main.py          # FastAPI entry point
-│   ├── services/        # STT, LLM, TTS services
-│   ├── static/          # Frontend JS, CSS
-│   └── templates/       # HTML UI
-│── .env.example         # Example env file
-│── requirements.txt     # Python dependencies
-│── README.md            # Project documentation
